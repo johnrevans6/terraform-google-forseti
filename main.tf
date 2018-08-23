@@ -14,11 +14,19 @@
  * limitations under the License.
  */
 
+resource "random_string" "rand" {
+  length  = 7
+  special = false
+  upper   = false
+}
+
 /******************************************
   Locals configuration
  *****************************************/
 locals {
-  project_id           = "${var.project_id}"
+  project_id = "${var.project_id}"
+
+  org_id               = "${var.org_id}"
   should_download      = "${var.download_forseti == "true" ? true : false}"
   skip_sendgrid_config = "${var.sendgrid_api_key == ""}"
 
@@ -32,6 +40,30 @@ locals {
     "compute.googleapis.com",
     "deploymentmanager.googleapis.com",
     "iam.googleapis.com",
+  ]
+
+  server_org_roles = [
+    "roles/browser",
+    "roles/compute.networkViewer",
+    "roles/iam.securityReviewer",
+    "roles/appengine.appViewer",
+    "roles/bigquery.dataViewer",
+    "roles/servicemanagement.quotaViewer",
+    "roles/serviceusage.serviceUsageConsumer",
+    "roles/cloudsql.viewer",
+    "roles/compute.securityAdmin",
+  ]
+
+  server_project_roles = [
+    "roles/storage.objectViewer",
+    "roles/storage.objectCreator",
+    "roles/cloudsql.client",
+    "roles/logging.logWriter",
+  ]
+
+  client_roles = [
+    "roles/storage.objectViewer",
+    "roles/logging.logWriter",
   ]
 
   launch_command_main        = "python install/gcp_installer.py --no-cloudshell --service-account-key-file ${var.credentials_file_path} --gsuite-superadmin-email ${var.gsuite_admin_email}"
@@ -54,6 +86,98 @@ resource "google_project_service" "activate_services" {
 }
 
 /*******************************************
+  Generate Service Accounts
+ *******************************************/
+resource "google_service_account" "forseti_server_sa" {
+  project      = "${local.project_id}"
+  account_id   = "forseti-server-gcp-${random_string.rand.result}"
+  display_name = "forseti-server-gcp-${random_string.rand.result}"
+}
+
+resource "google_service_account" "forseti_client_sa" {
+  project      = "${local.project_id}"
+  account_id   = "forseti-client-gcp-${random_string.rand.result}"
+  display_name = "forseti-server-gcp-${random_string.rand.result}"
+}
+
+/*******************************************
+  Provision Service Accounts
+ *******************************************/
+
+resource "google_organization_iam_member" "server_org_roles" {
+  count      = "${length(local.server_org_roles)}"
+  org_id     = "${local.org_id}"
+  role       = "${element(local.server_org_roles, count.index)}"
+  member     = "serviceAccount:${google_service_account.forseti_server_sa.email}"
+  depends_on = ["google_service_account.forseti_server_sa"]
+}
+
+resource "google_project_iam_member" "server_project_roles" {
+  count      = "${length(local.server_project_roles)}"
+  project    = "${local.project_id}"
+  role       = "${element(local.server_project_roles, count.index)}"
+  member     = "serviceAccount:${google_service_account.forseti_server_sa.email}"
+  depends_on = ["google_service_account.forseti_server_sa"]
+}
+
+resource "google_project_iam_member" "client_roles" {
+  count      = "${length(local.client_roles)}"
+  project    = "${local.project_id}"
+  role       = "${element(local.client_roles, count.index)}"
+  member     = "serviceAccount:${google_service_account.forseti_client_sa.email}"
+  depends_on = ["google_service_account.forseti_client_sa"]
+}
+
+/*******************************************
+  Create Firewall Rules
+ *******************************************/
+resource "google_compute_firewall" "forseti-server-deny-all" {
+  name                    = "forseti-server-deny-all-${random_string.rand.result}"
+  network                 = "${google_compute_network.default.name}"
+  target_service_accounts = "${google_service_account.forseti_server_sa.email}"
+  source_ranges           = ["0.0.0.0/0"]
+  priority                = "1"
+
+  deny {
+    protocol = "icmp"
+  }
+
+  deny {
+    protocol = "udp"
+  }
+
+  deny {
+    protocol = "tcp"
+  }
+}
+
+resource "google_compute_firewall" "forseti-server-ssh-external" {
+  name                    = "forseti-server-ssh-external-${random_string.rand.result}"
+  network                 = "${google_compute_network.default.name}"
+  target_service_accounts = "${google_service_account.forseti_server_sa.email}"
+  source_ranges           = ["0.0.0.0/0"]
+  priority                = "0"
+
+  allow {
+    protocol = "tcp"
+    port     = ["22"]
+  }
+}
+
+resource "google_compute_firewall" "forseti-server-allow-grpc" {
+  name                    = "forseti-server-allow-grpc-${random_string.rand.result}"
+  network                 = "${google_compute_network.default.name}"
+  target_service_accounts = "${google_service_account.forseti_server_sa.email}"
+  source_ranges           = ["10.128.0.0/9"]
+  priority                = "0"
+
+  allow {
+    protocol = "tcp"
+    port     = ["50051"]
+  }
+}
+
+/*******************************************
    Repo downloading
  *******************************************/
 resource "null_resource" "get_repo" {
@@ -73,10 +197,10 @@ resource "null_resource" "get_repo" {
 /*******************************************
    Forseti execution
  *******************************************/
-resource "null_resource" "execute_forseti" {
+resource "null_resource" "deploy_forseti_server" {
   # Execute forseti installation
   provisioner "local-exec" {
-    command = "cd forseti-security; ${local.launch_command_fmt}"
+    command = "cd forseti-security; gcloud deployment-manager deployments create forseti-server-${random_string.rand.result} --composite-type deployment-templates/deploy-forseti-server.yaml.in --properties {BUCKET_LOCATION:${var.gcs_location}}"
 
     environment {
       CLOUDSDK_CORE_PROJECT = "${local.project_id}"
@@ -92,5 +216,5 @@ resource "null_resource" "execute_forseti" {
 data "external" "bucket_retrieval" {
   program = ["bash", "${path.module}/scripts/get-project-buckets.sh", "${var.credentials_file_path}"]
 
-  depends_on = ["null_resource.execute_forseti"]
+  #depends_on = ["null_resource.execute_forseti"]
 }

@@ -31,6 +31,10 @@ variable "project_id" {
   description = "The ID of an existing Google project where Forseti will be installed"
 }
 
+variable "org_id" {
+  description = "The ID of the Organization where Forseti will be installed"
+}
+
 variable "credentials_file_path" {
   description = "Path to service account json"
 }

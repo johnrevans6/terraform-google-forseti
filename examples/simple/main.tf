@@ -32,6 +32,7 @@ module "forseti-install-simple" {
   source                       = "../../"
   gsuite_admin_email           = "${var.gsuite_admin_email}"
   project_id                   = "${var.project_id}"
+  org_id                       = "${var.org_id}"
   sendgrid_api_key             = "${var.sendgrid_api_key}"
   notification_recipient_email = "${var.notification_recipient_email}"
   credentials_file_path        = "${local.credentials_file_path}"

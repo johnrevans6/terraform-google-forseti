@@ -31,6 +31,7 @@ variable "cloud_sql_region" {
 
 variable "sendgrid_api_key" {
   description = "The Sendgrid api key for notifier"
+  default     = ""
 }
 
 variable "notification_recipient_email" {
@@ -43,6 +44,10 @@ variable "gsuite_admin_email" {
 
 variable "project_id" {
   description = "The ID of the project where Forseti will be installed"
+}
+
+variable "org_id" {
+  description = "The ID of the Organization where Forseti will be installed"
 }
 
 variable "forseti_repo_url" {
