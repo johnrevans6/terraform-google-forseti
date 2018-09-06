@@ -133,8 +133,8 @@ resource "google_project_iam_member" "client_roles" {
  *******************************************/
 resource "google_compute_firewall" "forseti-server-deny-all" {
   name                    = "forseti-server-deny-all-${random_string.rand.result}"
-  network                 = "${google_compute_network.default.name}"
-  target_service_accounts = "${google_service_account.forseti_server_sa.email}"
+  network                 = "${var.vpc_host_network}"
+  target_service_accounts = ["${google_service_account.forseti_server_sa.email}"]
   source_ranges           = ["0.0.0.0/0"]
   priority                = "1"
 
@@ -153,28 +153,147 @@ resource "google_compute_firewall" "forseti-server-deny-all" {
 
 resource "google_compute_firewall" "forseti-server-ssh-external" {
   name                    = "forseti-server-ssh-external-${random_string.rand.result}"
-  network                 = "${google_compute_network.default.name}"
-  target_service_accounts = "${google_service_account.forseti_server_sa.email}"
+  network                 = "${var.vpc_host_network}"
+  target_service_accounts = ["${google_service_account.forseti_server_sa.email}"]
   source_ranges           = ["0.0.0.0/0"]
   priority                = "0"
 
   allow {
     protocol = "tcp"
-    port     = ["22"]
+    ports    = ["22"]
   }
 }
 
 resource "google_compute_firewall" "forseti-server-allow-grpc" {
   name                    = "forseti-server-allow-grpc-${random_string.rand.result}"
-  network                 = "${google_compute_network.default.name}"
-  target_service_accounts = "${google_service_account.forseti_server_sa.email}"
+  network                 = "${var.vpc_host_network}"
+  target_service_accounts = ["${google_service_account.forseti_server_sa.email}"]
   source_ranges           = ["10.128.0.0/9"]
   priority                = "0"
 
   allow {
     protocol = "tcp"
-    port     = ["50051"]
+    ports    = ["50051"]
   }
+}
+
+/*******************************************
+  Create CloudSQL Instance
+ *******************************************/
+
+resource "google_sql_database_instance" "forseti_server_db_instance" {
+  name             = "forseti-server-db-${random_string.rand.result}"
+  database_version = "MYSQL_5_7"
+  region           = "${var.cloud_sql_region}"
+
+  settings {
+    tier              = "db-n1-standard-1"
+    disk_size         = "25"
+    disk_type         = "PD_SSD"
+    activation_policy = "ALWAYS"
+
+    backup_configuration {
+      binary_log_enabled = "true"
+      enabled            = "true"
+      start_time         = "08:00"
+    }
+
+    ip_configuration {
+      require_ssl = "true"
+    }
+  }
+}
+
+/*******************************************
+  Create Forseti Database
+ *******************************************/
+resource "google_sql_database" "forseti_security_database" {
+  name     = "forseti_security"
+  instance = "${google_sql_database_instance.forseti_server_db_instance.name}"
+  project  = "${var.project_id}"
+}
+
+/*******************************************
+  Create Forseti Database User
+ *******************************************/
+
+resource "google_sql_user" "forseti_security_user" {
+  name     = "forseti_security"
+  instance = "${google_sql_database_instance.forseti_server_db_instance.name}"
+  project  = "${var.project_id}"
+}
+
+/*******************************************
+  Create Forseti Server
+ *******************************************/
+resource "google_compute_instance" "forseti_server" {
+  name         = "forseti-server-vm-${random_string.rand.result}"
+  machine_type = "n1-standard-2"
+  zone         = "${var.cloud_sql_region}"
+
+  boot_disk {
+    initialize_params {
+      image = "ubuntu-1804-lts"
+    }
+  }
+
+  network_interface {
+    network    = "${var.vpc_host_network}"
+    subnetwork = "${var.vpc_host_subnetwork}"
+
+    access_config {
+      // Ephemeral IP
+    }
+  }
+
+  service_account {
+    email  = "${google_service_account.forseti_server_sa.email}"
+    scopes = ["cloud-platform"]
+  }
+}
+
+/*******************************************
+  Create Forseti Client
+ *******************************************/
+resource "google_compute_instance" "forseti_client" {
+  name         = "forseti-client-vm-${random_string.rand.result}"
+  machine_type = "n1-standard-2"
+  zone         = "${var.cloud_sql_region}"
+
+  boot_disk {
+    initialize_params {
+      image = "ubuntu-1804-lts"
+    }
+  }
+
+  network_interface {
+    network    = "${var.vpc_host_network}"
+    subnetwork = "${var.vpc_host_subnetwork}"
+
+    access_config {
+      // Ephemeral IP
+    }
+  }
+
+  service_account {
+    email  = "${google_service_account.forseti_client_sa.email}"
+    scopes = ["cloud-platform"]
+  }
+}
+
+/*******************************************
+  Create GCS buckets
+ *******************************************/
+resource "google_storage_bucket" "server-store" {
+  name          = "forseti-server-${random_string.rand.result}"
+  storage_class = "REGIONAL"
+  location      = "${var.gcs_location}"
+}
+
+resource "google_storage_bucket" "client-store" {
+  name          = "forseti-client-${random_string.rand.result}"
+  storage_class = "REGIONAL"
+  location      = "${var.gcs_location}"
 }
 
 /*******************************************

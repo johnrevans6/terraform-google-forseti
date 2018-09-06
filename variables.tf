@@ -60,6 +60,16 @@ variable "forseti_repo_branch" {
   default     = "stable"
 }
 
+variable "vpc_host_network" {
+  description = "VPC name where Forseti VM will run."
+  default     = "default"
+}
+
+variable "vpc_host_subnetwork" {
+  description = "Subnetwork name where Forseti VM will run."
+  default     = "default"
+}
+
 variable "credentials_file_path" {
   description = "Path to service account json"
 }
